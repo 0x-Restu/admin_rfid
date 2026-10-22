@@ -1,32 +1,162 @@
-*.log
-.DS_Store
+# ==============================================================================
+# .gitignore - EduCard Smart School & RFID POS Management
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# 1. FILE KREDENSIAL & RAHASIA (Credentials, Environment & Secrets)
+# ------------------------------------------------------------------------------
 .env
-.env.backup
-.env.production
-.phpactor.json
-.phpunit.result.cache
-/.codex
-/.cursor/
-/.idea
-/.nova
-/.phpunit.cache
-/.vscode
-/.zed
+.env.*
+!.env.example
+
+# Private Keys, Certificates, and Tokens
+*.key
+*.pem
+*.crt
+*.cer
+*.pfx
+*.p12
+id_rsa*
+id_ed25519*
+/storage/*.key
+oauth-*.key
+
+# Cloud & Service Account Credentials
+serviceAccountKey*.json
+google-services*.json
+firebase*.json
+credentials.json
+client_secret*.json
+gcp-*.json
+aws-*.json
+
+# Package Manager Authentication
 /auth.json
-/node_modules
-/public/build
-/public/fonts-manifest.dev.json
+.npmrc.local
+
+# ------------------------------------------------------------------------------
+# 2. DEPENDENCIES & BUILD ARTIFACTS
+# ------------------------------------------------------------------------------
+# PHP & Composer
+/vendor/
+composer.phar
+
+# Node & Frontend Build
+/node_modules/
+/dist/
+/build/
+/public/build/
 /public/hot
 /public/storage
-/storage/*.key
-/storage/pail
-/vendor
+/public/fonts-manifest.dev.json
+.pnpm-store/
+
+# Logs & Framework Runtimes
+*.log
+/storage/logs/*.log
+/storage/framework/cache/data/*
+/storage/framework/cache/locks/*
+/storage/framework/sessions/*
+/storage/framework/views/*
+/storage/framework/testing/*
+/storage/pail/
+!storage/framework/cache/data/.gitignore
+!storage/framework/cache/locks/.gitignore
+!storage/framework/sessions/.gitignore
+!storage/framework/views/.gitignore
+!storage/framework/testing/.gitignore
+!storage/logs/.gitignore
+!storage/app/.gitignore
+!storage/app/public/.gitignore
+!storage/app/private/.gitignore
+/bootstrap/cache/*
+!bootstrap/cache/.gitignore
+
+# Test & Coverage Caches
+.phpunit.result.cache
+/.phpunit.cache/
+.pest/
+coverage/
+*.lcov
+
+# Local Database Files
+*.sqlite
+*.sqlite-journal
+*.sqlite3
+*.db
+*.sql.gz
+*.sql.tar.gz
+dump.rdb
+
+# IDE Helpers & Meta
 _ide_helper.php
+_ide_helper_models.php
+.phpstorm.meta.php
+.phpactor.json
+
+# ------------------------------------------------------------------------------
+# 3. CACHE & ARTEFAK AI TOOLS / AGENTS
+# ------------------------------------------------------------------------------
+# Agent & Assistant Folders
+/.gemini/
+/.agent/
+/.antigravity/
+/.claude/
+/.cursor/
+/.windsurf/
+/.codex/
+/.cline/
+/.chat/
+/.copilot/
+
+# Scratchpads, Prompts & Chat History
+**/scratch/
+scratchpad*
+chat_history/
+*transcript*.jsonl
+prompts/
+*.prompt
+
+# Local AI Instruction & Rule Files
+CLAUDE.md
+CLAUDE.local.md
+AGENTS.md
+.cursorrules
+.cursorignore
+
+# Mockup Mentahan / File Prototipe Asli
+educard_smart_school_rfid_pos_management_dashboard*.html
+
+# ------------------------------------------------------------------------------
+# 4. SYSTEM & EDITOR FILES (OS & IDEs)
+# ------------------------------------------------------------------------------
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Linux
+*~
+.directory
+
+# IDEs & Text Editors
+/.idea/
+/.vscode/
+/.zed/
+/.nova/
+*.sublime-project
+*.sublime-workspace
+*.swp
+*.swo
+
+# Vagrant / Homestead
 Homestead.json
 Homestead.yaml
-Thumbs.db
-
-# AI & Mentahan Files
-CLAUDE.md
-AGENTS.md
-educard_smart_school_rfid_pos_management_dashboard (1).html
+.vagrant/
