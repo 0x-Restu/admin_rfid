@@ -67,6 +67,18 @@ class Student extends Model
 
     public function getPhotoAttribute(): string
     {
-        return $this->photo_url ?: 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?auto=format&fit=crop&w=400&q=80';
+        if (!empty($this->photo_url)) {
+            if (str_starts_with($this->photo_url, 'http://') || str_starts_with($this->photo_url, 'https://') || str_starts_with($this->photo_url, 'data:image/')) {
+                return $this->photo_url;
+            }
+            return asset(ltrim($this->photo_url, '/'));
+        }
+
+        return 'https://ui-avatars.com/api/?name=' . urlencode($this->full_name ?: 'Siswa') . '&background=0f172a&color=ffffff&size=256&bold=true';
+    }
+
+    public function getGenderLabelAttribute(): string
+    {
+        return $this->gender === 'P' ? 'Perempuan' : 'Laki-laki';
     }
 }

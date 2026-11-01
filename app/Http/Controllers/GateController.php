@@ -6,6 +6,7 @@ use App\Models\Attendance;
 use App\Models\RfidCard;
 use App\Models\SecurityAuditLog;
 use App\Models\Student;
+use App\Services\SpreadsheetService;
 use Carbon\Carbon;
 use Illuminate\Http\Request;
 
@@ -24,16 +25,18 @@ class GateController extends Controller
         $totalPulangToday = Attendance::whereDate('date', $today)->whereNotNull('tap_out_time')->count();
 
         // Sample students for instant gate tap testing
-        $sampleStudents = Student::with('rfidCard')
+        $sampleStudents = Student::with(['rfidCard', 'parent'])
             ->whereHas('rfidCard')
-            ->take(8)
+            ->take(10)
             ->get();
 
-        $recentAttendances = Attendance::with('student', 'card')
+        $recentAttendances = Attendance::with(['student.parent', 'card'])
             ->whereDate('date', $today)
             ->latest('updated_at')
             ->take(15)
             ->get();
+
+        $isPublicMonitor = false;
 
         return view('gate.terminal', compact(
             'totalHadirToday',
@@ -41,8 +44,101 @@ class GateController extends Controller
             'totalOnTimeToday',
             'totalPulangToday',
             'sampleStudents',
-            'recentAttendances'
+            'recentAttendances',
+            'isPublicMonitor'
         ));
+    }
+
+    /**
+     * Display Public Fullscreen Gate Monitor (No Login Required)
+     */
+    public function publicMonitor()
+    {
+        $today = Carbon::today()->toDateString();
+
+        $totalHadirToday = Attendance::whereDate('date', $today)->count();
+        $totalLateToday = Attendance::whereDate('date', $today)->where('is_late', true)->count();
+        $totalOnTimeToday = $totalHadirToday - $totalLateToday;
+        $totalPulangToday = Attendance::whereDate('date', $today)->whereNotNull('tap_out_time')->count();
+
+        $sampleStudents = Student::with(['rfidCard', 'parent'])
+            ->whereHas('rfidCard')
+            ->take(10)
+            ->get();
+
+        $recentAttendances = Attendance::with(['student.parent', 'card'])
+            ->whereDate('date', $today)
+            ->latest('updated_at')
+            ->take(15)
+            ->get();
+
+        $isPublicMonitor = true;
+
+        return view('gate.terminal', compact(
+            'totalHadirToday',
+            'totalLateToday',
+            'totalOnTimeToday',
+            'totalPulangToday',
+            'sampleStudents',
+            'recentAttendances',
+            'isPublicMonitor'
+        ));
+    }
+
+    /**
+     * Stream Natural Indonesian Voice TTS Audio (Cached Locally)
+     */
+    public function tts(Request $request)
+    {
+        $text = trim((string) $request->query('text', ''));
+        if ($text === '') {
+            abort(400);
+        }
+
+        $text = mb_substr($text, 0, 180);
+        $cacheDir = storage_path('app/tts_cache');
+        if (!is_dir($cacheDir)) {
+            @mkdir($cacheDir, 0755, true);
+        }
+
+        $hash = md5('id_natural_v1_' . $text);
+        $cacheFile = $cacheDir . '/' . $hash . '.mp3';
+
+        if (file_exists($cacheFile) && filesize($cacheFile) > 200) {
+            return response()->file($cacheFile, [
+                'Content-Type' => 'audio/mpeg',
+                'Cache-Control' => 'public, max-age=86400',
+            ]);
+        }
+
+        $url = 'https://translate.googleapis.com/translate_tts?client=gtx&ie=UTF-8&tl=id&ttsspeed=1&q=' . rawurlencode($text);
+
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_FOLLOWLOCATION => true,
+            CURLOPT_TIMEOUT => 4,
+            CURLOPT_SSL_VERIFYPEER => false,
+            CURLOPT_USERAGENT => 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36',
+            CURLOPT_HTTPHEADER => [
+                'Accept: audio/webm,audio/ogg,audio/wav,audio/*;q=0.9,*/*;q=0.8',
+                'Accept-Language: id-ID,id;q=0.9',
+            ],
+        ]);
+
+        $audioBytes = curl_exec($ch);
+        $httpCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+
+        if ($httpCode === 200 && $audioBytes && strlen($audioBytes) > 200) {
+            @file_put_contents($cacheFile, $audioBytes);
+            return response($audioBytes, 200, [
+                'Content-Type' => 'audio/mpeg',
+                'Cache-Control' => 'public, max-age=86400',
+            ]);
+        }
+
+        abort(503);
     }
 
     /**
@@ -58,9 +154,9 @@ class GateController extends Controller
         $uid = strtoupper(trim($request->input('card_uid')));
         $gateName = $request->input('gate_name') ?: 'Gerbang Depan Utama';
 
-        $card = RfidCard::with('student')->where('card_uid', $uid)->first();
+        $card = RfidCard::with(['student.parent'])->where('card_uid', $uid)->first();
 
-        if (!$card) {
+        if (!$card || !$card->student) {
             SecurityAuditLog::record(
                 action: 'GATE_UNREGISTERED_CARD_TAP',
                 status: 'FAILED',
@@ -94,6 +190,16 @@ class GateController extends Controller
                 'success' => false,
                 'message' => "AKSES DITOLAK: Kartu berstatus '{$card->status}'! " . ($card->blocked_reason ? "({$card->blocked_reason})" : "Hubungi Bagian Kesiswaan."),
                 'card_status' => $card->status,
+                'student' => [
+                    'full_name' => $card->student->full_name,
+                    'nisn' => $card->student->nisn,
+                    'gender' => $card->student->gender,
+                    'gender_label' => $card->student->gender_label,
+                    'class_name' => $card->student->class_name,
+                    'school_name' => $card->student->school_name,
+                    'photo_url' => $card->student->photo,
+                    'parent_name' => $card->student->parent ? $card->student->parent->full_name : '-',
+                ],
             ], 403);
         }
 
@@ -127,7 +233,9 @@ class GateController extends Controller
             ]);
 
             $actionType = 'TAP_IN';
-            $statusMessage = $isLate ? "TAP-IN (TERLAMBAT: Masuk Pukul {$now->format('H:i:s')} WIB)" : "TAP-IN (TEPAT WAKTU: Masuk Pukul {$now->format('H:i:s')} WIB)";
+            $statusMessage = $isLate
+                ? "TAP-IN MASUK (TERLAMBAT: {$now->format('H:i:s')} WIB)"
+                : "TAP-IN MASUK (TEPAT WAKTU: {$now->format('H:i:s')} WIB)";
 
             SecurityAuditLog::record(
                 action: 'GATE_TAP_IN',
@@ -149,7 +257,7 @@ class GateController extends Controller
             ]);
 
             $actionType = 'TAP_OUT';
-            $statusMessage = "TAP-OUT (PULANG: Pukul {$now->format('H:i:s')} WIB)";
+            $statusMessage = "TAP-OUT PULANG (Pukul {$now->format('H:i:s')} WIB)";
 
             SecurityAuditLog::record(
                 action: 'GATE_TAP_OUT',
@@ -174,25 +282,35 @@ class GateController extends Controller
             'is_late' => $attendance->is_late,
             'status_message' => $statusMessage,
             'time_str' => $now->format('H:i:s') . ' WIB',
+            'date_str' => $now->format('d/m/Y'),
+            'tap_in_str' => $attendance->tap_in_time ? $attendance->tap_in_time->format('H:i:s') . ' WIB' : '-',
+            'tap_out_str' => $attendance->tap_out_time ? $attendance->tap_out_time->format('H:i:s') . ' WIB' : '-',
             'gate_name' => $gateName,
             'student' => [
+                'id' => $student->id,
                 'full_name' => $student->full_name,
                 'nisn' => $student->nisn,
+                'gender' => $student->gender,
+                'gender_label' => $student->gender_label,
                 'class_name' => $student->class_name,
                 'school_name' => $student->school_name,
                 'photo_url' => $student->photo,
+                'parent_name' => $student->parent ? $student->parent->full_name : '-',
+                'parent_phone' => $student->parent ? ($student->parent->phone_number ?? '-') : '-',
+                'status' => $student->status,
             ],
             'card' => [
                 'card_uid' => $card->card_uid,
+                'status' => $card->status,
                 'balance_formatted' => 'Rp ' . number_format($card->balance, 0, ',', '.'),
             ],
         ]);
     }
 
     /**
-     * Full Attendance History & Reports Table
+     * Build filtered query for attendance history and export
      */
-    public function history(Request $request)
+    private function buildHistoryQuery(Request $request)
     {
         $query = Attendance::with(['student.parent', 'card'])->latest('date');
 
@@ -218,13 +336,75 @@ class GateController extends Controller
             $search = $request->search;
             $query->whereHas('student', function ($q) use ($search) {
                 $q->where('full_name', 'like', "%{$search}%")
-                  ->orWhere('nisn', 'like', "%{$search}%");
+                    ->orWhere('nisn', 'like', "%{$search}%");
             });
         }
 
+        return $query;
+    }
+
+    /**
+     * Full Attendance History & Reports Table
+     */
+    public function history(Request $request)
+    {
+        $query = $this->buildHistoryQuery($request);
         $attendances = $query->paginate(20)->withQueryString();
         $classes = Student::select('class_name')->distinct()->pluck('class_name');
 
         return view('gate.history', compact('attendances', 'classes'));
+    }
+
+    /**
+     * Export Attendance History to Spreadsheet (.xlsx or .csv)
+     */
+    public function export(Request $request)
+    {
+        $format = strtolower($request->query('format', 'xlsx')) === 'csv' ? 'csv' : 'xlsx';
+        $attendances = $this->buildHistoryQuery($request)->get();
+
+        $headers = [
+            'No',
+            'Tanggal',
+            'NISN',
+            'Nama Lengkap Siswa',
+            'Jenis Kelamin',
+            'Kelas',
+            'Sekolah',
+            'UID Kartu RFID',
+            'Tap Masuk (WIB)',
+            'Tap Pulang (WIB)',
+            'Lokasi Gerbang',
+            'Status Kedisiplinan',
+            'Foto URL',
+        ];
+
+        $rows = [];
+        foreach ($attendances as $idx => $att) {
+            $st = $att->student;
+            $rows[] = [
+                $idx + 1,
+                $att->date ? $att->date->format('Y-m-d') : '-',
+                $st ? $st->nisn : '-',
+                $st ? $st->full_name : '-',
+                $st ? $st->gender_label : '-',
+                $st ? $st->class_name : '-',
+                $st ? $st->school_name : '-',
+                $att->card ? $att->card->card_uid : '-',
+                $att->tap_in_time ? $att->tap_in_time->format('H:i:s') : '-',
+                $att->tap_out_time ? $att->tap_out_time->format('H:i:s') : '-',
+                $att->gate_name,
+                $att->is_late ? 'TERLAMBAT' : 'TEPAT WAKTU',
+                $st ? $st->photo : '',
+            ];
+        }
+
+        return SpreadsheetService::download(
+            'Rekap_Presensi_Gerbang_' . date('Ymd_His'),
+            $headers,
+            $rows,
+            $format,
+            'Rekap Presensi'
+        );
     }
 }

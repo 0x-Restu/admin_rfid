@@ -65,9 +65,16 @@
             </button>
         </form>
 
-        <p class="text-center text-[11px] text-slate-400">
-            Koneksi database aktif via Supabase API
-        </p>
+        <div class="pt-4 border-t border-slate-100 space-y-2.5">
+            <a href="{{ route('gate.monitor') }}"
+               class="w-full py-2.5 px-3 bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 rounded-xl text-xs font-bold transition flex items-center justify-center space-x-2">
+                <i class="fa-solid fa-tv"></i>
+                <span>Buka Monitor Gerbang (Tanpa Login)</span>
+            </a>
+            <p class="text-center text-[11px] text-slate-400">
+                Koneksi database aktif via Supabase API
+            </p>
+        </div>
 
     </div>
 

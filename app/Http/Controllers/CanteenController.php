@@ -6,6 +6,7 @@ use App\Models\CanteenTransaction;
 use App\Models\RfidCard;
 use App\Models\SecurityAuditLog;
 use App\Models\Student;
+use App\Services\SpreadsheetService;
 use Carbon\Carbon;
 use Exception;
 use Illuminate\Http\Request;
@@ -31,12 +32,12 @@ class CanteenController extends Controller
             ->count();
 
         // Sample active student cards for quick simulator testing
-        $sampleStudents = Student::with('rfidCard')
+        $sampleStudents = Student::with(['rfidCard', 'parent'])
             ->whereHas('rfidCard')
-            ->take(8)
+            ->take(10)
             ->get();
 
-        $recentTransactions = CanteenTransaction::with('student', 'card')
+        $recentTransactions = CanteenTransaction::with(['student.parent', 'card'])
             ->whereDate('created_at', $today)
             ->latest()
             ->take(10)
@@ -65,7 +66,7 @@ class CanteenController extends Controller
 
         $card = RfidCard::with(['student.parent'])->where('card_uid', $uid)->first();
 
-        if (!$card) {
+        if (!$card || !$card->student) {
             SecurityAuditLog::record(
                 action: 'RFID_CARD_UNREGISTERED_SCAN',
                 status: 'FAILED',
@@ -141,16 +142,21 @@ class CanteenController extends Controller
                 'daily_limit' => $card->daily_spending_limit,
                 'daily_limit_formatted' => 'Rp ' . number_format($card->daily_spending_limit, 0, ',', '.'),
                 'today_spent' => $todaySpent,
+                'today_spent_formatted' => 'Rp ' . number_format($todaySpent, 0, ',', '.'),
                 'remaining_limit' => $remainingLimit,
+                'remaining_limit_formatted' => 'Rp ' . number_format($remainingLimit, 0, ',', '.'),
             ],
             'student' => [
                 'id' => $card->student->id,
                 'full_name' => $card->student->full_name,
                 'nisn' => $card->student->nisn,
+                'gender' => $card->student->gender,
+                'gender_label' => $card->student->gender_label,
                 'class_name' => $card->student->class_name,
                 'school_name' => $card->student->school_name,
                 'photo_url' => $card->student->photo,
                 'parent_name' => $card->student->parent ? $card->student->parent->full_name : '-',
+                'parent_phone' => $card->student->parent ? ($card->student->parent->phone_number ?? '-') : '-',
             ],
             'bill' => [
                 'amount' => $billAmount,
@@ -181,9 +187,9 @@ class CanteenController extends Controller
         try {
             $transaction = DB::transaction(function () use ($uid, $billAmount, $tenantName, $menuName) {
                 // High Security: Pessimistic Row Lock on Card to prevent Double Spending
-                $card = RfidCard::where('card_uid', $uid)->lockForUpdate()->first();
+                $card = RfidCard::with(['student.parent'])->where('card_uid', $uid)->lockForUpdate()->first();
 
-                if (!$card) {
+                if (!$card || !$card->student) {
                     throw new Exception("Kartu tidak ditemukan.");
                 }
 
@@ -251,15 +257,39 @@ class CanteenController extends Controller
                     ]
                 );
 
+                $trx->setRelation('student', $card->student);
+                $trx->setRelation('card', $card);
+
                 return $trx;
             });
+
+            $st = $transaction->student;
+            $card = $transaction->card;
 
             return response()->json([
                 'success' => true,
                 'message' => "Pembayaran berhasil sebesar Rp " . number_format($billAmount, 0, ',', '.'),
                 'receipt_number' => $transaction->receipt_number,
+                'time_str' => $transaction->created_at ? $transaction->created_at->format('d/m/Y H:i:s') . ' WIB' : now()->format('d/m/Y H:i:s') . ' WIB',
+                'tenant_name' => $transaction->tenant_name,
+                'menu_name' => $transaction->menu_name,
+                'amount' => $transaction->amount,
+                'amount_formatted' => 'Rp ' . number_format($transaction->amount, 0, ',', '.'),
+                'balance_before' => $transaction->balance_before,
+                'balance_before_formatted' => 'Rp ' . number_format($transaction->balance_before, 0, ',', '.'),
                 'balance_after' => $transaction->balance_after,
                 'balance_after_formatted' => 'Rp ' . number_format($transaction->balance_after, 0, ',', '.'),
+                'student' => [
+                    'full_name' => $st->full_name,
+                    'nisn' => $st->nisn,
+                    'gender_label' => $st->gender_label,
+                    'class_name' => $st->class_name,
+                    'school_name' => $st->school_name,
+                    'photo_url' => $st->photo,
+                ],
+                'card' => [
+                    'card_uid' => $card->card_uid,
+                ],
             ]);
         } catch (Exception $e) {
             SecurityAuditLog::record(
@@ -279,9 +309,9 @@ class CanteenController extends Controller
     }
 
     /**
-     * History & Reports of Canteen Sales
+     * Build filtered query for canteen transactions and export
      */
-    public function transactions(Request $request)
+    private function buildTransactionsQuery(Request $request)
     {
         $query = CanteenTransaction::with(['student', 'card', 'cashier'])->latest();
 
@@ -297,18 +327,81 @@ class CanteenController extends Controller
             $search = $request->search;
             $query->where(function ($q) use ($search) {
                 $q->where('receipt_number', 'like', "%{$search}%")
-                  ->orWhereHas('student', function ($sq) use ($search) {
-                      $sq->where('full_name', 'like', "%{$search}%")
-                         ->orWhere('nisn', 'like', "%{$search}%");
-                  });
+                    ->orWhereHas('student', function ($sq) use ($search) {
+                        $sq->where('full_name', 'like', "%{$search}%")
+                            ->orWhere('nisn', 'like', "%{$search}%");
+                    });
             });
         }
 
+        return $query;
+    }
+
+    /**
+     * History & Reports of Canteen Sales
+     */
+    public function transactions(Request $request)
+    {
+        $query = $this->buildTransactionsQuery($request);
+        $totalFilteredSum = (clone $query)->sum('amount');
         $transactions = $query->paginate(20)->withQueryString();
         $tenants = CanteenTransaction::select('tenant_name')->distinct()->pluck('tenant_name');
 
-        $totalFilteredSum = $query->sum('amount');
-
         return view('canteen.transactions', compact('transactions', 'tenants', 'totalFilteredSum'));
+    }
+
+    /**
+     * Export Canteen Transactions to Spreadsheet (.xlsx or .csv)
+     */
+    public function export(Request $request)
+    {
+        $format = strtolower($request->query('format', 'xlsx')) === 'csv' ? 'csv' : 'xlsx';
+        $transactions = $this->buildTransactionsQuery($request)->get();
+
+        $headers = [
+            'No',
+            'No. Kwitansi',
+            'Waktu Transaksi',
+            'NISN',
+            'Nama Lengkap Siswa',
+            'Kelas',
+            'UID Kartu RFID',
+            'Tenant / Stan',
+            'Item / Keterangan',
+            'Nominal Belanja (Rp)',
+            'Saldo Sebelum (Rp)',
+            'Sisa Saldo (Rp)',
+            'Kasir',
+            'Foto URL',
+        ];
+
+        $rows = [];
+        foreach ($transactions as $idx => $trx) {
+            $st = $trx->student;
+            $rows[] = [
+                $idx + 1,
+                $trx->receipt_number,
+                $trx->created_at ? $trx->created_at->format('Y-m-d H:i:s') : '-',
+                $st ? $st->nisn : '-',
+                $st ? $st->full_name : '-',
+                $st ? $st->class_name : '-',
+                $trx->card ? $trx->card->card_uid : '-',
+                $trx->tenant_name,
+                $trx->menu_name,
+                (float) $trx->amount,
+                (float) $trx->balance_before,
+                (float) $trx->balance_after,
+                $trx->cashier ? $trx->cashier->name : 'Sistem',
+                $st ? $st->photo : '',
+            ];
+        }
+
+        return SpreadsheetService::download(
+            'Laporan_Transaksi_Kantin_' . date('Ymd_His'),
+            $headers,
+            $rows,
+            $format,
+            'Transaksi Kantin'
+        );
     }
 }

@@ -31,6 +31,7 @@
 </head>
 <body class="bg-slate-50 text-slate-800 antialiased min-h-screen flex">
 
+    @auth
     <!-- Mobile Sidebar Backdrop -->
     <div id="sidebar-backdrop" onclick="toggleSidebar()" class="fixed inset-0 bg-slate-900/40 z-40 lg:hidden hidden transition-opacity"></div>
 
@@ -100,6 +101,11 @@
                         <i class="fa-solid fa-clock-rotate-left w-4 text-center"></i>
                         <span>Rekap Presensi</span>
                     </a>
+                    <a href="{{ route('gate.monitor') }}" target="_blank"
+                       class="flex items-center space-x-2.5 px-3 py-2 rounded-xl font-semibold transition text-blue-600 hover:bg-blue-50">
+                        <i class="fa-solid fa-tv w-4 text-center"></i>
+                        <span>Monitor Public (No Login)</span>
+                    </a>
                 </div>
                 @endif
 
@@ -168,10 +174,12 @@
         </div>
 
     </aside>
+    @endauth
 
     <!-- MAIN CONTENT AREA -->
     <div class="flex-1 min-w-0 flex flex-col min-h-screen">
         
+        @auth
         <!-- Header Bar -->
         <header class="h-16 bg-white border-b border-slate-200 px-4 sm:px-6 lg:px-8 flex items-center justify-between sticky top-0 z-30">
             <div class="flex items-center space-x-3">
@@ -192,6 +200,7 @@
                 </div>
             </div>
         </header>
+        @endauth
 
         <!-- Main Body Content -->
         <main class="p-4 sm:p-6 lg:p-8 flex-1">
@@ -241,22 +250,26 @@
                 const AudioCtx = window.AudioContext || window.webkitAudioContext;
                 if (!AudioCtx) return;
                 const ctx = new AudioCtx();
-                const osc = ctx.createOscillator();
-                const gain = ctx.createGain();
 
                 if (type === 'success') {
-                    osc.type = 'sine';
-                    osc.frequency.setValueAtTime(880, ctx.currentTime);
-                    gain.gain.setValueAtTime(0.15, ctx.currentTime);
-                    gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.15);
-                    osc.connect(gain);
-                    gain.connect(ctx.destination);
-                    osc.start();
-                    osc.stop(ctx.currentTime + 0.15);
+                    // Two-tone chime (A5 -> D6)
+                    const osc1 = ctx.createOscillator();
+                    const gain1 = ctx.createGain();
+                    osc1.type = 'sine';
+                    osc1.frequency.setValueAtTime(880, ctx.currentTime);
+                    osc1.frequency.setValueAtTime(1174.66, ctx.currentTime + 0.09);
+                    gain1.gain.setValueAtTime(0.18, ctx.currentTime);
+                    gain1.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.25);
+                    osc1.connect(gain1);
+                    gain1.connect(ctx.destination);
+                    osc1.start();
+                    osc1.stop(ctx.currentTime + 0.25);
                 } else {
+                    const osc = ctx.createOscillator();
+                    const gain = ctx.createGain();
                     osc.type = 'sawtooth';
-                    osc.frequency.setValueAtTime(150, ctx.currentTime);
-                    gain.gain.setValueAtTime(0.2, ctx.currentTime);
+                    osc.frequency.setValueAtTime(160, ctx.currentTime);
+                    gain.gain.setValueAtTime(0.22, ctx.currentTime);
                     gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.35);
                     osc.connect(gain);
                     gain.connect(ctx.destination);
@@ -264,6 +277,75 @@
                     osc.stop(ctx.currentTime + 0.35);
                 }
             } catch (e) {}
+        }
+
+        window.educardVoiceEnabled = true;
+        window.educardCurrentAudio = null;
+
+        function speakBrowserFallback(text) {
+            try {
+                if (!('speechSynthesis' in window)) return;
+                window.speechSynthesis.cancel();
+
+                const utterance = new SpeechSynthesisUtterance(text);
+                utterance.lang = 'id-ID';
+                utterance.rate = 0.96;
+                utterance.pitch = 1.02;
+                utterance.volume = 1.0;
+
+                const voices = window.speechSynthesis.getVoices();
+                // Prioritize natural neural Indonesian voices (Edge Natural Gadis/Ardi, Google Bahasa Indonesia, Damayanti, etc.)
+                const idVoice =
+                    voices.find(v => v.name.toLowerCase().includes('gadis') && v.name.toLowerCase().includes('natural')) ||
+                    voices.find(v => v.name.toLowerCase().includes('ardi') && v.name.toLowerCase().includes('natural')) ||
+                    voices.find(v => v.name.toLowerCase().includes('google') && v.lang.toLowerCase().includes('id')) ||
+                    voices.find(v => v.lang.toLowerCase().includes('id-id') || v.lang.toLowerCase().includes('id_id')) ||
+                    voices.find(v => v.name.toLowerCase().includes('indones'));
+
+                if (idVoice) {
+                    utterance.voice = idVoice;
+                }
+
+                window.speechSynthesis.speak(utterance);
+            } catch (e) {}
+        }
+
+        function speakVoice(text) {
+            if (!window.educardVoiceEnabled || !text) return;
+            try {
+                if (window.educardCurrentAudio) {
+                    window.educardCurrentAudio.pause();
+                    window.educardCurrentAudio.currentTime = 0;
+                    window.educardCurrentAudio = null;
+                }
+                if ('speechSynthesis' in window) {
+                    window.speechSynthesis.cancel();
+                }
+
+                const ttsUrl = `/tts-voice?text=${encodeURIComponent(text)}`;
+                const audio = new Audio(ttsUrl);
+                audio.playbackRate = 1.04;
+                window.educardCurrentAudio = audio;
+
+                audio.onerror = function () {
+                    speakBrowserFallback(text);
+                };
+
+                const playPromise = audio.play();
+                if (playPromise !== undefined) {
+                    playPromise.catch(() => {
+                        speakBrowserFallback(text);
+                    });
+                }
+            } catch (e) {
+                speakBrowserFallback(text);
+            }
+        }
+
+        if ('speechSynthesis' in window) {
+            window.speechSynthesis.onvoiceschanged = () => {
+                window.speechSynthesis.getVoices();
+            };
         }
     </script>
     @yield('scripts')
